@@ -1,0 +1,68 @@
+.TH HAMANI_LOGANALYZER 1 "November 16, 2026" "Custom Shell Project" "User Commands"
+.SH NAME
+hamani_loganalyzer \- analyze a log file using memory-mapped I/O
+.SH SYNOPSIS
+.B hamani_loganalyzer
+.B -f
+.I file
+.br
+.B hamani_loganalyzer
+.B -h
+.SH DESCRIPTION
+.B hamani_loganalyzer
+opens a regular log file for reading, checks its size with
+.BR fstat (2),
+and maps it into memory with
+.BR mmap (2).
+It counts the lines and puts each one under ERROR, WARNING, INFO, or OTHER.
+Uppercase and lowercase both work. Only whole words match.
+WARN and WARNING both count as warnings.
+If a line has more than one level, ERROR comes first, then WARNING, then INFO.
+Blank lines count as OTHER.
+The last line still counts if it has no newline at the end.
+.SH OPTIONS
+.TP
+.BI -f " file"
+Pick the log file to read (required).
+.TP
+.B -h
+Show the help message.
+.SH EXAMPLES
+.nf
+.B hamani_loganalyzer -f hamani_loganalyzer_sample.log
+.B hamani_loganalyzer -f "/path/to/server.log"
+.B hamani_loganalyzer -h
+.fi
+.SH OUTPUT
+Prints the file name, total lines, Errors, Warnings, Info, and Other counts.
+Each line goes into one group, so these counts add up to the total lines.
+.SH EXIT STATUS
+.TP
+.B 0
+Success.
+.TP
+.B 1
+File or system call error.
+.TP
+.B 2
+Incorrect arguments.
+.TP
+.B 130
+Interrupted by SIGINT (Ctrl+C).
+.TP
+.B 143
+Interrupted by SIGTERM.
+.SH NOTES
+The mapping is read-only. This command does not change the file.
+Use a saved log file that stays the same while the command runs.
+Shortening a file while it is mapped can cause SIGBUS.
+If SIGINT or SIGTERM arrives while scanning, the command removes the mapping
+and prints a cancellation message to standard error.
+It does not print unfinished counts.
+.SH SEE ALSO
+.BR mmap (2),
+.BR fstat (2),
+.BR getopt (3),
+.BR sigaction (2)
+.SH AUTHOR
+Operating System I Custom Shell group project.
