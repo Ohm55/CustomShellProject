@@ -1,0 +1,2 @@
+This is a test file for the CSC 332 filecrypt command.
+The recovered file must be byte-for-byte identical to this file.
