@@ -11,9 +11,10 @@ static void shell_handler(int signal_number) {
 }
 
 /* Check several calls in one process, like the group shell. */
-int main(void) {
+int main(int argc, char *argv[]) {
+    if (argc != 2) return 1;
     char *bad[] = {"loganalyzer", "-zx", NULL};
-    char *good[] = {"loganalyzer", "-f", "hamani_loganalyzer_sample.log", NULL};
+    char *good[] = {"loganalyzer", "-f", argv[1], NULL};
     char *help[] = {"loganalyzer", "-h", NULL};
     char *missing[] = {"loganalyzer", "-f", NULL};
 

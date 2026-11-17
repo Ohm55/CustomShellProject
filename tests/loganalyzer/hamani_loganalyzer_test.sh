@@ -1,15 +1,25 @@
 #!/bin/sh
 set -eu
 
+cd "$(dirname "$0")/../.."
+export LC_ALL=C
+
 tmpdir=$(mktemp -d)
 trap 'rm -rf "$tmpdir"' EXIT
 trap 'exit 1' HUP INT TERM
 logfile="$tmpdir/log file.log"
+program="$tmpdir/hamani_loganalyzer"
+sample="tests/loganalyzer/hamani_loganalyzer_sample.log"
+compiler=${CC:-cc}
+
+"$compiler" -std=c11 -O2 -Wall -Wextra -Wpedantic \
+    -DLOGANALYZER_STANDALONE source/loganalyzer/hamani_loganalyzer.c \
+    -o "$program"
 
 check_counts() {
     file=$1
     shift
-    output=$(./hamani_loganalyzer -f "$file")
+    output=$("$program" -f "$file")
     expected=$(printf 'File: %s\nTotal lines: %s\nErrors: %s\nWarnings: %s\nInfo: %s\nOther: %s\n' "$file" "$@")
     if [ "$output" != "$expected" ]; then
         printf 'FAIL: wrong counts for %s\nExpected:\n%s\nActual:\n%s\n' "$file" "$expected" "$output"
@@ -28,9 +38,9 @@ expect_failure() {
     fi
 }
 
-before=$(cksum hamani_loganalyzer_sample.log)
-check_counts hamani_loganalyzer_sample.log 6 2 1 2 1
-[ "$before" = "$(cksum hamani_loganalyzer_sample.log)" ]
+before=$(cksum "$sample")
+check_counts "$sample" 6 2 1 2 1
+[ "$before" = "$(cksum "$sample")" ]
 
 # Check an empty file and a last line with no newline.
 : > "$logfile"
@@ -53,20 +63,27 @@ awk 'BEGIN { for (i = 0; i < 100000; i++) printf "a"; print " [ERROR]" }' > "$lo
 check_counts "$logfile" 1 1 0 0 0
 
 # Check the error codes for bad options and files that cannot be used.
-expect_failure 2 ./hamani_loganalyzer
-expect_failure 2 ./hamani_loganalyzer -f
-expect_failure 2 ./hamani_loganalyzer -z
-expect_failure 2 ./hamani_loganalyzer -f hamani_loganalyzer_sample.log extra
-expect_failure 1 ./hamani_loganalyzer -f "$tmpdir/missing.log"
-expect_failure 1 ./hamani_loganalyzer -f "$tmpdir"
+expect_failure 2 "$program"
+expect_failure 2 "$program" -f
+expect_failure 2 "$program" -z
+expect_failure 2 "$program" -f "$sample" extra
+expect_failure 1 "$program" -f "$tmpdir/missing.log"
+expect_failure 1 "$program" -f "$tmpdir"
 mkfifo "$tmpdir/pipe"
-expect_failure 1 ./hamani_loganalyzer -f "$tmpdir/pipe"
+expect_failure 1 "$program" -f "$tmpdir/pipe"
 chmod 000 "$logfile"
 if [ ! -r "$logfile" ]; then
-    expect_failure 1 ./hamani_loganalyzer -f "$logfile"
+    expect_failure 1 "$program" -f "$logfile"
 fi
 chmod 600 "$logfile"
 
-./hamani_loganalyzer -h | grep -q '^Usage:'
-./hamani_loganalyzer -fhamani_loganalyzer_sample.log | grep -q '^Total lines: 6$'
+"$program" -h | grep -q '^Usage:'
+"$program" -f"$sample" | grep -q '^Total lines: 6$'
 echo 'All loganalyzer command tests passed.'
+
+"$compiler" -std=c11 -O2 -Wall -Wextra -Wpedantic \
+    -Isource/loganalyzer source/loganalyzer/hamani_loganalyzer.c \
+    tests/loganalyzer/hamani_loganalyzer_repeat_calls.c \
+    -o "$tmpdir/hamani_loganalyzer_repeat_calls"
+"$tmpdir/hamani_loganalyzer_repeat_calls" "$sample" > /dev/null 2>&1
+echo 'Repeated shell calls passed.'
