@@ -1,0 +1,107 @@
+.TH PROCESSGROUP 1 "November 2026" "Custom Shell" "User Commands"
+.SH NAME
+processgroup \- manage a batch of processes: collective signalling and resource monitoring
+.SH SYNOPSIS
+.B processgroup
+[\fIoptions\fR] [\fB\-n\fR \fICOUNT\fR] \fB\-\-\fR \fICOMMAND\fR [\fIARGS\fR...]
+.br
+.B processgroup
+[\fIoptions\fR] \fB\-f\fR \fIBATCHFILE\fR
+.br
+.B processgroup
+[\fIoptions\fR] \fB\-p\fR \fIPGID\fR
+.SH DESCRIPTION
+.B processgroup
+runs several processes as one Linux process group so they can be signalled
+and observed together.
+In \fIlaunch mode\fR it starts the processes, places them all in a new group
+(\fBsetpgid\fR(2)), optionally monitors their CPU time and resident memory
+by reading \fI/proc/<pid>/stat\fR from a supervisor thread
+(\fBpthread_create\fR(3)), optionally sends one signal to the entire group with
+\fBkill(\-pgid, sig)\fR, waits for every member with \fBwait4\fR(2), and
+prints per-process exit status and resource usage.
+In \fIattach mode\fR (\fB\-p\fR) it signals and/or monitors a process group
+that is already running.
+.PP
+Interrupting
+.B processgroup
+(SIGINT or SIGTERM) forwards that signal to the whole group.
+A second interrupt sends SIGKILL to the group.
+.SH OPTIONS
+.TP
+.BI \-n " COUNT"
+Run \fICOUNT\fR copies of \fICOMMAND\fR in one group (1\-1000, default 1).
+.TP
+.BI \-f " FILE"
+Run every command listed in \fIFILE\fR, one per line, in one group.
+Text after \fB#\fR is a comment; blank lines are ignored.
+.TP
+.BI \-p " PGID"
+Attach to existing process group \fIPGID\fR. Requires \fB\-s\fR and/or \fB\-m\fR.
+.TP
+.BI \-s " SIG"
+Signal to send to the whole group, as a name (\fBTERM\fR, \fBSIGKILL\fR,
+\fBSTOP\fR, \fBCONT\fR, \fBHUP\fR, \fBINT\fR, \fBQUIT\fR, \fBUSR1\fR,
+\fBUSR2\fR, \fBTSTP\fR) or a number.
+.TP
+.BI \-a " SECS"
+Delay before sending the \fB\-s\fR signal. In launch mode the signal is only
+sent when \fB\-a\fR is given. In attach mode the signal is sent immediately
+unless \fB\-a\fR is given.
+.TP
+.B \-m
+Print a table of PID, parent, state, CPU seconds, resident memory (KB) and
+command for the group at every interval.
+.TP
+.BI \-i " SECS"
+Monitoring interval in seconds (may be fractional; default 1).
+.TP
+.BI \-c " COUNT"
+Attach mode: stop after \fICOUNT\fR monitor samples (default: until the group
+is empty or interrupted).
+.TP
+.B \-h
+Print usage and exit.
+.SH EXIT STATUS
+.TP
+.B 0
+Success; in launch mode every process exited with status 0.
+.TP
+.B 1
+Usage error, system call failure, or at least one process failed or was killed
+by a signal.
+.SH EXAMPLES
+Run four sleepers as one group, watch them, and terminate them after 3 seconds:
+.PP
+.RS
+processgroup \-n 4 \-m \-i 0.5 \-s TERM \-a 3 \-\- sleep 60
+.RE
+.PP
+Run a batch file:
+.PP
+.RS
+processgroup \-f batch.txt
+.RE
+.PP
+Pause and resume an existing group (find the PGID with \fBps \-o pgid\fR):
+.PP
+.RS
+processgroup \-p 4242 \-s STOP
+.br
+processgroup \-p 4242 \-s CONT
+.RE
+.SH FILES
+.TP
+.I /proc/<pid>/stat
+Source of state, CPU time and resident set size.
+.SH NOTES
+A process that changes its own process group (for example with \fBsetsid\fR(1))
+leaves the group and is no longer affected.
+\fBSIGKILL\fR and \fBSIGSTOP\fR cannot be caught by members.
+.SH SEE ALSO
+.BR kill (2),
+.BR setpgid (2),
+.BR wait4 (2),
+.BR proc (5),
+.BR signal (7),
+.BR getopt (3)
