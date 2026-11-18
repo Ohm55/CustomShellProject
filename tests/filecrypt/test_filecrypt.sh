@@ -4,9 +4,10 @@ set -u
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 PROJECT_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/../.." && pwd)
-PROGRAM=${FILECRYPT_PROGRAM:-"$PROJECT_ROOT/source/filecrypt/filecrypt"}
-TEST_INPUT="$SCRIPT_DIR/test_input.txt"
 TEMP_DIR=$(mktemp -d "${TMPDIR:-/tmp}/filecrypt-test.XXXXXX")
+PROGRAM="$TEMP_DIR/filecrypt"
+TEST_INPUT="$SCRIPT_DIR/test_input.txt"
+
 PASSED=0
 FAILED=0
 
@@ -14,7 +15,48 @@ cleanup()
 {
     rm -rf -- "$TEMP_DIR"
 }
+
 trap cleanup EXIT HUP INT TERM
+
+CC=${CC:-cc}
+
+if ! command -v pkg-config >/dev/null 2>&1; then
+    echo "pkg-config is required."
+    exit 1
+fi
+
+# Homebrew installs OpenSSL in a separate directory on macOS.
+if command -v brew >/dev/null 2>&1; then
+    OPENSSL_PC="$(brew --prefix openssl@3)/lib/pkgconfig"
+    PKG_CONFIG_PATH="$OPENSSL_PC${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+    export PKG_CONFIG_PATH
+fi
+
+if ! OPENSSL_CFLAGS=$(pkg-config --cflags openssl); then
+    echo "OpenSSL development files were not found."
+    exit 1
+fi
+
+if ! OPENSSL_LIBS=$(pkg-config --libs openssl); then
+    echo "OpenSSL development files were not found."
+    exit 1
+fi
+
+if ! "$CC" \
+    -std=c11 \
+    -O2 \
+    -Wall \
+    -Wextra \
+    -Wpedantic \
+    $OPENSSL_CFLAGS \
+    "$PROJECT_ROOT/source/filecrypt/filecrypt.c" \
+    "$PROJECT_ROOT/source/filecrypt/crypto.c" \
+    -o "$PROGRAM" \
+    $OPENSSL_LIBS
+then
+    echo "Failed to compile filecrypt."
+    exit 1
+fi
 
 pass()
 {
@@ -42,10 +84,7 @@ expect_failure()
     if "$@" >/dev/null 2>&1; then fail "$description"; else pass "$description"; fi
 }
 
-if [ ! -x "$PROGRAM" ]; then
-    printf 'Build filecrypt first: make -C %s/source/filecrypt\n' "$PROJECT_ROOT" >&2
-    exit 1
-fi
+
 
 printf '%s\n' 'correct horse battery staple' > "$TEMP_DIR/key"
 printf '%s\n' 'wrong password' > "$TEMP_DIR/wrong-key"

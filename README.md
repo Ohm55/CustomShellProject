@@ -19,19 +19,14 @@ Install the required packages:
 brew install openssl@3 pkg-config
 ```
 
-### Compile filecrypt
+### Test filecrypt
 
-From the root of the repository:
-
-```bash
-make -C source/filecrypt
-```
-
-### Run the tests
+The test script compiles filecrypt and runs its test cases:
 
 ```bash
 ./tests/filecrypt/test_filecrypt.sh
-```
+
+``` 
 
 ### Run filecrypt
 
@@ -51,4 +46,20 @@ Decrypt a file:
     -d \
     -i encrypted.fc \
     -o recovered.txt
+```
+
+
+
+## Custom shell integration
+
+The group leader will compile your source with the combined shell:
+
+```bash
+cc \
+    -DFILECRYPT_NO_MAIN \
+    source/main.c \
+    source/filecrypt/filecrypt.c \
+    source/filecrypt/crypto.c \
+    -o customshell \
+    $(pkg-config --cflags --libs openssl)
 ```

@@ -15,6 +15,7 @@
 #include <openssl/crypto.h>
 
 #include "crypto.h"
+#include "filecrypt.h"
 
 #define PASSWORD_CAPACITY 1024
 
@@ -53,23 +54,69 @@ static void usage(FILE *stream, const char *program)
             program, program);
 }
 
-static int install_signal_handlers(void)
+struct saved_signal_handlers {
+    struct sigaction old_int;
+    struct sigaction old_term;
+    struct sigaction old_hup;
+    int installed;
+};
+
+static int install_signal_handlers(struct saved_signal_handlers *saved)
 {
     struct sigaction action;
-    int signals[] = {SIGINT, SIGTERM, SIGHUP};
-    size_t i;
 
     memset(&action, 0, sizeof(action));
     action.sa_handler = handle_signal;
     sigemptyset(&action.sa_mask);
 
-    for (i = 0; i < sizeof(signals) / sizeof(signals[0]); ++i) {
-        if (sigaction(signals[i], &action, NULL) == -1) {
-            perror("sigaction");
-            return -1;
-        }
+    saved->installed = 0;
+
+    if (sigaction(SIGINT, &action, &saved->old_int) == -1) {
+        perror("filecrypt: sigaction SIGINT");
+        return -1;
     }
+
+    if (sigaction(SIGTERM, &action, &saved->old_term) == -1) {
+        perror("filecrypt: sigaction SIGTERM");
+        (void)sigaction(SIGINT, &saved->old_int, NULL);
+        return -1;
+    }
+
+    if (sigaction(SIGHUP, &action, &saved->old_hup) == -1) {
+        perror("filecrypt: sigaction SIGHUP");
+        (void)sigaction(SIGTERM, &saved->old_term, NULL);
+        (void)sigaction(SIGINT, &saved->old_int, NULL);
+        return -1;
+    }
+
+    saved->installed = 1;
     return 0;
+}
+
+static int restore_signal_handlers(struct saved_signal_handlers *saved)
+{
+    int result = 0;
+
+    if (!saved->installed)
+        return 0;
+
+    if (sigaction(SIGHUP, &saved->old_hup, NULL) == -1) {
+        perror("filecrypt: restore SIGHUP");
+        result = -1;
+    }
+
+    if (sigaction(SIGTERM, &saved->old_term, NULL) == -1) {
+        perror("filecrypt: restore SIGTERM");
+        result = -1;
+    }
+
+    if (sigaction(SIGINT, &saved->old_int, NULL) == -1) {
+        perror("filecrypt: restore SIGINT");
+        result = -1;
+    }
+
+    saved->installed = 0;
+    return result;
 }
 
 static int read_password_from_terminal(unsigned char *password, size_t capacity)
@@ -161,7 +208,7 @@ static int read_password_from_file(const char *path,
     return 0;
 }
 
-int main(int argc, char **argv)
+int filecrypt_main(int argc, char **argv)
 {
     enum operation operation = OP_NONE;
     const char *input_path = NULL;
@@ -172,6 +219,7 @@ int main(int argc, char **argv)
     int option;
     int status = EXIT_FAILURE;
     int password_locked = 0;
+    struct saved_signal_handlers saved_handlers = {0};
 
     static const struct option options[] = {
         {"encrypt",  no_argument,       NULL, 'e'},
@@ -183,6 +231,20 @@ int main(int argc, char **argv)
         {"help",     no_argument,       NULL, 'h'},
         {NULL,        0,                 NULL, 0}
     };
+
+    g_cancelled = 0;
+
+    #if defined(__APPLE__) || defined(__FreeBSD__) || \
+        defined(__NetBSD__) || defined(__OpenBSD__)
+        extern int optreset;
+        optreset = 1;
+        optind = 1;
+    #elif defined(__GLIBC__)
+        optind = 0;
+    #else
+        optind = 1;
+    #endif
+
 
     while ((option = getopt_long(argc, argv, "edi:o:k:fh", options, NULL)) != -1) {
         switch (option) {
@@ -222,7 +284,7 @@ int main(int argc, char **argv)
         fprintf(stderr, "filecrypt: input and output must be different files\n");
         return EXIT_FAILURE;
     }
-    if (install_signal_handlers() == -1)
+    if (install_signal_handlers(&saved_handlers) == -1)
         return EXIT_FAILURE;
 
     /* Lock the password buffer when permitted and cleanse it before exit. */
@@ -257,7 +319,21 @@ int main(int argc, char **argv)
 
 cleanup:
     OPENSSL_cleanse(password, sizeof(password));
+
     if (password_locked)
         (void)munlock(password, sizeof(password));
+
+    if (restore_signal_handlers(&saved_handlers) == -1)
+        status = EXIT_FAILURE;
+
     return status;
 }
+
+#ifndef FILECRYPT_NO_MAIN
+
+int main(int argc, char *argv[])
+{
+    return filecrypt_main(argc, argv);
+}
+
+#endif
