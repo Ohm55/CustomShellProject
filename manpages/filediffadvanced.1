@@ -1,0 +1,46 @@
+.TH FILEDIFFADVANCED 1
+.SH NAME
+filediffadvanced \- compare two files and report comparison time
+.SH SYNOPSIS
+.B filediffadvanced
+.RB [ \-b ]
+.I LEFT RIGHT
+.br
+.B filediffadvanced \-h
+.SH DESCRIPTION
+.B filediffadvanced
+compares two regular files and reports whether they match.
+By default it compares complete lines, including any terminating newline.
+In binary mode it compares raw bytes.
+Line and byte numbers start at 1.
+If one file ends first, the command reports the first line or byte missing from it.
+.PP
+The command reports the size of each file in bytes and the elapsed time and CPU
+time of the comparison in milliseconds.
+The comparison stops at the first difference, so an early difference can take
+less time than comparing two matching files.
+.SH OPTIONS
+.TP
+.B \-b
+Compare bytes instead of lines.
+.TP
+.B \-h
+Show usage and exit.
+.SH EXIT STATUS
+.TP
+.B 0
+The files match, or help was requested.
+.TP
+.B 1
+The files differ.
+.TP
+.B 2
+An argument or comparison error occurred.
+.TP
+.B 130
+The user interrupted the comparison.
+.SH EXAMPLES
+.nf
+filediffadvanced original.txt edited.txt
+filediffadvanced \-b original.bin recovered.bin
+.fi
