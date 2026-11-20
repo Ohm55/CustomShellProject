@@ -1,0 +1,77 @@
+.SH NAME
+filecrypt \- encrypt and decrypt files
+
+.SH SYNOPSIS
+.B filecrypt
+.BR \-e | \-d
+.BI \-i " input"
+.BI \-o " output"
+.RB [ \-k " key-file" ]
+.RB [ \-f ]
+
+.SH DESCRIPTION
+.B filecrypt
+encrypts and decrypts files using AES-256-GCM encryption.
+
+If no key file is provided, the program asks the user to enter a password.
+
+.SH OPTIONS
+
+.TP
+.BR \-e ", " \-\-encrypt
+Encrypt the input file.
+
+.TP
+.BR \-d ", " \-\-decrypt
+Decrypt the input file.
+
+.TP
+.BR \-i ", " \-\-input " FILE"
+Specify the input file.
+
+.TP
+.BR \-o ", " \-\-output " FILE"
+Specify the output file.
+
+.TP
+.BR \-k ", " \-\-key-file " FILE"
+Read the password from a file.
+
+.TP
+.BR \-f ", " \-\-force
+Replace an existing output file.
+
+.TP
+.BR \-h ", " \-\-help
+Display help information.
+
+.SH EXAMPLES
+
+Encrypt a file:
+
+.EX
+filecrypt -e -i message.txt -o message.fc
+.EE
+
+Decrypt a file:
+
+.EX
+filecrypt -d -i message.fc -o recovered.txt
+.EE
+
+.SH EXIT STATUS
+
+.TP
+.B 0
+The operation completed successfully.
+
+.TP
+.B 1
+An error occurred.
+
+.SH SECURITY
+Passwords and encryption keys are erased from memory after use.
+
+An incorrect password or modified encrypted file causes decryption to fail.
+
+// Steve 

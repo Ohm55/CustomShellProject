@@ -40,3 +40,64 @@ For the Custom Shell, include `loganalyzer/hamani_loganalyzer.h` from
 `-DLOGANALYZER_STANDALONE`. The shell calls
 `loganalyzer(command_argc, command_argv)` for the `loganalyzer` command.
 The function returns a status instead of exiting the shell.
+
+
+
+## Filecrypt (command 3)
+
+Filecrypt encrypts and decrypts files using AES-256-GCM authenticated
+encryption. It accepts a password from the terminal or a key file.
+
+The files follow the shared project layout:
+
+- `source/filecrypt/`: source code and header files.
+- `tests/filecrypt/`: tests and sample input.
+- `manpages/filecrypt.1`: man page.
+
+### Requirements
+
+Linux:
+
+```sh
+sudo apt install build-essential libssl-dev pkg-config
+```
+
+macOS:
+
+```sh
+brew install openssl@3 pkg-config
+```
+
+### Testing
+
+From the project root, run:
+
+```sh
+./tests/filecrypt/test_filecrypt.sh
+```
+
+The test script compiles filecrypt in a temporary directory, runs the
+tests, and removes the temporary executable.
+
+Read the manual with:
+
+```sh
+man ./manpages/filecrypt.1
+```
+
+### Custom shell integration
+
+The custom shell includes:
+
+```c
+#include "filecrypt/filecrypt.h"
+```
+
+The shell runs the command with:
+
+```c
+filecrypt_main(command_argc, command_argv);
+```
+
+When building the custom shell, compile filecrypt with
+`FILECRYPT_NO_MAIN` and link OpenSSL using `-lcrypto`.
