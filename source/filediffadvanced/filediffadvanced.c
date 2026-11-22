@@ -5,6 +5,8 @@
 #define _DARWIN_C_SOURCE
 #endif
 
+#include "filediffadvanced.h"
+
 #include <errno.h>
 #include <fcntl.h>
 #include <signal.h>

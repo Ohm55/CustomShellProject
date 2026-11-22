@@ -1,4 +1,6 @@
 #define _GNU_SOURCE
+#include "processgroup.h"
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

@@ -7,7 +7,7 @@ test_dir=$(mktemp -d)
 trap 'rm -rf "$test_dir"' 0
 program="$test_dir/filediffadvanced"
 
-cc -std=c11 -Wall -Wextra -Wpedantic -o "$program" \
+cc -std=c11 -Wall -Wextra -Wpedantic -Isource/filediffadvanced -o "$program" \
     source/filediffadvanced/filediffadvanced.c tests/filediffadvanced/driver.c
 
 check() {
