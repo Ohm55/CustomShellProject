@@ -1,4 +1,4 @@
-int filediffadvanced(int argc, char *argv[]);
+#include "filediffadvanced.h"
 
 int main(int argc, char *argv[])
 {
