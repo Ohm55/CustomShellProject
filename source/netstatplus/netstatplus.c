@@ -1,6 +1,9 @@
+#define _DARWIN_C_SOURCE 1
+#define _BSD_SOURCE 1
 #define _POSIX_C_SOURCE 200809L
 #include "netstatplus.h"
 
+#include <arpa/inet.h>
 #include <ctype.h>
 #include <errno.h>
 #include <signal.h>
@@ -9,6 +12,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/poll.h>
+#include <sys/sysctl.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -210,10 +214,6 @@ static void ip_to_string(const uint8_t *ip, char *buf, size_t sz) {
 }
 
 /* ------------------------------------------------------------------ */
-/*  Helper: format a port as string                                   */
-/* ------------------------------------------------------------------ */
-
-/* ------------------------------------------------------------------ */
 /*  Format a throughput value for display                             */
 /* ------------------------------------------------------------------ */
 
@@ -282,17 +282,289 @@ static void print_header(void) {
 }
 
 /* ------------------------------------------------------------------ */
-/*  Take a snapshot: read all connections from /proc/net/<proto>      */
-/*  into the snapshot array. Returns entry count or -1 on error.     */
+/*  macOS / BSD sysctl-based snapshot fallback                        */
+/*  Reads TCP/UDP socket state via sysctlbyname().                    */
+/*  Uses multiple stride strategies to handle arm64/x86_64 layouts. */
+/* ------------------------------------------------------------------ */
+
+#if defined(__APPLE__) || defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__)
+
+/* Check if an IP address looks plausible (not obviously fake).
+ * Accept: 10.0.0.0/8, 172.16-31.x/12, 192.168.0.0/16, 127.0.0.0/8,
+ *         0.0.0.0 (wildcard), and common public ranges below 224. */
+static int ip_looks_plausible(const uint8_t ip[4]) {
+    uint8_t b0 = ip[0], b1 = ip[1];
+    /* Wildcard: 0.0.0.0 is valid (listening sockets) */
+    if (b0 == 0 && b1 == 0 && ip[2] == 0 && ip[3] == 0) return 1;
+    /* Loopback */
+    if (b0 == 127) return 1;
+    /* Private ranges */
+    if (b0 == 10) return 1;
+    if (b0 == 172 && b1 >= 16 && b1 <= 31) return 1;
+    if (b0 == 192 && b1 == 168) return 1;
+    /* Public but low-range (accept common < 224) */
+    if (b0 < 224 && b0 >= 1) return 1;
+    return 0;
+}
+
+/* Parse a sockaddr_in struct from PCB data at offset off within buf.
+ * Checks bounds safely: only reads if off + 8 <= len.
+ * Returns 1 on success, fills port (host order) and IP bytes. */
+static int try_parse_sockaddr_safe(const unsigned char *buf, size_t len,
+                                   size_t off,
+                                   uint16_t *port, uint8_t ip[4]) {
+    if (off + 8 > len) return 0;  /* Bounds check: must fit sockaddr_in */
+
+    const unsigned char *p = buf + off;
+
+    /* Strategy A: BSD standard — sin_family at p[0..1] == AF_INET (0x02, 0x00).
+     * This is the most reliable method on macOS/BSD. */
+    if (p[0] == 0x02 && p[1] == 0x00) {
+        ip[0] = p[4]; ip[1] = p[5]; ip[2] = p[6]; ip[3] = p[7];
+        memcpy(port, p + 2, sizeof(*port));  /* network byte order */
+        *port = ntohs(*port);
+        return 1;
+    }
+
+    /* Strategy B: Try common offsets where sin_family could appear.
+     * For arm64/x86_64 the sockaddr_in can be at different positions. */
+    static const size_t test_offsets[] = {2, 4, 8, 12, 16, 20, 24};
+    int n_offsets = sizeof(test_offsets) / sizeof(test_offsets[0]);
+
+    for (int oi = 0; oi < n_offsets; oi++) {
+        size_t t_off = off + test_offsets[oi];
+        if (t_off + 8 > len) continue;  /* Bounds check */
+        const unsigned char *q = buf + t_off;
+        if (q[0] == 0x02 && q[1] == 0x00) {
+            ip[0] = q[4]; ip[1] = q[5]; ip[2] = q[6]; ip[3] = q[7];
+            memcpy(port, q + 2, sizeof(*port));
+            *port = ntohs(*port);
+            return 1;
+        }
+    }
+
+    /* Strategy C: Accept any non-zero 4-byte value as IP with next bytes as port.
+     * Only accept if it looks like a valid IP address and the
+     * surrounding bytes suggest it's part of a sockaddr_in struct
+     * (i.e., the family field at offset -2 would be AF_INET). */
+    uint32_t a = (uint32_t)(p[0] | (p[1] << 8) | (p[2] << 16) | (p[3] << 24));
+    if (a != 0 && a != 0xFFFFFFFF && ip_looks_plausible((const uint8_t *)&a)) {
+        /* Check that offset -2 bytes look like AF_INET family */
+        int family_ok = 1;
+        if (off > 1) {
+            const unsigned char *fam = buf + off - 2;
+            if (fam[0] != 0x02 || fam[1] != 0x00) family_ok = 0;
+        } else {
+            /* Off at start — check next bytes for sin_len byte */
+            if (off + 2 <= len && p[2] != 0x10) family_ok = 0;
+        }
+        uint16_t pt = (uint16_t)(p[4] | (p[5] << 8));
+        if (family_ok && pt < 65535) {
+            ip[0] = (a >> 24) & 0xFF; ip[1] = (a >> 16) & 0xFF;
+            ip[2] = (a >> 8) & 0xFF;  ip[3] = a & 0xFF;
+            *port = pt;
+            return 1;
+        }
+    }
+
+    /* No valid sockaddr_in found */
+    return 0;
+}
+
+/* Parse the sysctl PCB buffer using multiple stride strategies.
+ * Returns number of entries found. */
+static int parse_pcb_sysctl(const unsigned char *buf, size_t len,
+                            const char *proto_name,
+                            snapshot_t *snap) {
+    if (len < 8) return 0;
+
+    /* Try several common strides and take the one yielding the most entries. */
+    uint32_t best_count = 0;
+    int best_stride = 0;
+
+    /* First entry: try standard stride sizes */
+    static const uint32_t default_strides[] = {24, 32, 48, 64};
+
+    /* Also try to interpret the buffer header as a stride hint.
+     * First uint32 LE = pcbdata offset; Second uint32 LE = stride hint. */
+    uint32_t stride_hint = (uint32_t)(buf[4] | (buf[5] << 8) |
+                                      (buf[6] << 16) | (buf[7] << 24));
+    /* Add stride hint to candidate list if reasonable */
+    int n_strides = sizeof(default_strides) / sizeof(default_strides[0]);
+    uint32_t all_strides[16];
+    memcpy(all_strides, default_strides, sizeof(default_strides));
+    if (stride_hint > 8 && stride_hint < 256) {
+        /* Check dedup */
+        int dup = 0;
+        for (int i = 0; i < n_strides && !dup; i++) {
+            if (all_strides[i] == stride_hint) dup = 1;
+        }
+        if (!dup && (size_t)n_strides + 1 <= sizeof(all_strides) / sizeof(all_strides[0])) {
+            all_strides[n_strides++] = stride_hint;
+        }
+    }
+
+    /* For each stride, count how many valid sockaddr_in pairs we find. */
+    for (int si = 0; si < n_strides; si++) {
+        uint32_t stride = all_strides[si];
+        snapshot_t trial;
+        memset(&trial, 0, sizeof(trial));
+
+        /* Start at the pcbdata offset (first uint32 LE) */
+        size_t pcb_off = (size_t)((uint32_t)(buf[0] | (buf[1] << 8) |
+                                             (buf[2] << 16) | (buf[3] << 24)));
+        if (pcb_off >= len) pcb_off = 0;
+
+        size_t p = pcb_off;
+        while (p + 16 <= len && trial.count < MAX_CONN) {
+            uint16_t lport; uint8_t lip[4];
+            uint16_t rport; uint8_t rip[4];
+
+            if (try_parse_sockaddr_safe(buf, len, p, &lport, lip) &&
+                try_parse_sockaddr_safe(buf, len, p + 8, &rport, rip)) {
+                conn_entry_t *e = &trial.entries[trial.count];
+                memset(e, 0, sizeof(*e));
+                strncpy(e->proto, proto_name, 4);
+                e->local_ip[0] = lip[0]; e->local_ip[1] = lip[1];
+                e->local_ip[2] = lip[2]; e->local_ip[3] = lip[3];
+                e->local_port = lport;
+                e->remote_ip[0] = rip[0]; e->remote_ip[1] = rip[1];
+                e->remote_ip[2] = rip[2]; e->remote_ip[3] = rip[3];
+                e->remote_port = rport;
+                e->state = 0x0A; /* LISTEN */
+                trial.count++;
+            }
+            p += stride;
+        }
+
+        if ((unsigned)trial.count > best_count) {
+            best_count = (unsigned)trial.count;
+            best_stride = si;
+        }
+    }
+
+    /* If nothing found via stride approach, try byte-by-byte scan */
+    if (best_count == 0) {
+        snapshot_t scan;
+        memset(&scan, 0, sizeof(scan));
+
+        for (size_t off = 0; off + 16 <= len && scan.count < MAX_CONN; off++) {
+            uint16_t lport; uint8_t lip[4];
+            uint16_t rport; uint8_t rip[4];
+
+            if (try_parse_sockaddr_safe(buf, len, off, &lport, lip) &&
+                try_parse_sockaddr_safe(buf, len, off + 8, &rport, rip)) {
+                conn_entry_t *e = &scan.entries[scan.count];
+                memset(e, 0, sizeof(*e));
+                strncpy(e->proto, proto_name, 4);
+                e->local_ip[0] = lip[0]; e->local_ip[1] = lip[1];
+                e->local_ip[2] = lip[2]; e->local_ip[3] = lip[3];
+                e->local_port = lport;
+                e->remote_ip[0] = rip[0]; e->remote_ip[1] = rip[1];
+                e->remote_ip[2] = rip[2]; e->remote_ip[3] = rip[3];
+                e->remote_port = rport;
+                e->state = 0x0A; /* LISTEN */
+                scan.count++;
+            }
+        }
+
+        if ((unsigned)scan.count > best_count) {
+            best_count = scan.count;
+        }
+    }
+
+    /* Now re-parse with the best stride to get actual entries */
+    memset(snap, 0, sizeof(*snap));
+    if (best_count > 0) {
+        uint32_t stride = all_strides[best_stride];
+        size_t pcb_off = (size_t)((uint32_t)(buf[0] | (buf[1] << 8) |
+                                              (buf[2] << 16) | (buf[3] << 24)));
+        if (pcb_off >= len) pcb_off = 0;
+
+        size_t p = pcb_off;
+        while (p + 16 <= len && snap->count < MAX_CONN) {
+            uint16_t lport; uint8_t lip[4];
+            uint16_t rport; uint8_t rip[4];
+
+            if (try_parse_sockaddr_safe(buf, len, p, &lport, lip) &&
+                try_parse_sockaddr_safe(buf, len, p + 8, &rport, rip)) {
+                conn_entry_t *e = &snap->entries[snap->count];
+                memset(e, 0, sizeof(*e));
+                strncpy(e->proto, proto_name, 4);
+                e->local_ip[0] = lip[0]; e->local_ip[1] = lip[1];
+                e->local_ip[2] = lip[2]; e->local_ip[3] = lip[3];
+                e->local_port = lport;
+                e->remote_ip[0] = rip[0]; e->remote_ip[1] = rip[1];
+                e->remote_ip[2] = rip[2]; e->remote_ip[3] = rip[3];
+                e->remote_port = rport;
+                e->state = 0x0A; /* LISTEN */
+                snap->count++;
+            }
+            p += stride;
+        }
+    }
+
+    return (int)best_count;
+}
+
+/* macOS/BSD sysctl-based take_snapshot. */
+static int take_snapshot_sysctl(const config_t *cfg, snapshot_t *snap) {
+    size_t len = 0;
+    static const char *names[] = {
+        "net.inet.tcp.pcblist",
+        "net.inet6.tcp.pcblist",
+        "net.inet.udp.pcblist",
+        "net.inet6.udp.pcblist",
+        NULL
+    };
+
+    for (int n = 0; names[n]; n++) {
+        const char *name = names[n];
+
+        int proto = (strstr(name, "tcp") != NULL) ? IPPROTO_TCP : IPPROTO_UDP;
+        const char *pname = (proto == IPPROTO_TCP) ? "tcp " : "udp ";
+
+        /* TCP or UDP filter */
+        if ((proto == IPPROTO_TCP && !cfg->show_tcp && cfg->show_udp)) continue;
+        if ((proto == IPPROTO_UDP && !cfg->show_udp && cfg->show_tcp)) continue;
+
+        if (sysctlbyname(name, NULL, &len, NULL, 0) == -1) continue;
+        if (len < 8) continue;
+
+        unsigned char *buf = (unsigned char *)malloc(len);
+        if (!buf) continue;
+
+        size_t actual = len;
+        if (sysctlbyname(name, buf, &actual, NULL, 0) == -1) { free(buf); continue; }
+        len = actual;
+
+        /* Parse PCB data from the buffer */
+        int count = parse_pcb_sysctl(buf, len, pname, snap);
+
+        free(buf);
+
+        if (count > 0) break;  /* Found entries — don't try more protocols */
+    }
+
+    return snap->count;
+}
+
+#endif /* __APPLE__ || BSD */
+
+/* ------------------------------------------------------------------ */
+/*  Take a snapshot: read all connections from /proc or sysctl.       */
+/*  Returns entry count (0 is valid — means no active connections).   */
 /* ------------------------------------------------------------------ */
 
 static int take_snapshot(const config_t *cfg, snapshot_t *snap) {
     FILE *fp = NULL;
-    static const char *tcp_paths[] = { "/proc/net/tcp", "/proc/net/tcp6", NULL };
-    static const char *udp_paths[] = { "/proc/net/udp", "/proc/net/udp6", NULL };
+    int got_anything = 0;
 
-    /* TCP connections. */
+    /* --- Linux: /proc/net/tcp* and /proc/net/udp* --- */
+
+    /* TCP connections (or default, which includes both). */
     if (cfg->show_tcp || (!cfg->show_udp && !cfg->show_tcp)) {
+        static const char *tcp_paths[] = { "/proc/net/tcp", "/proc/net/tcp6", NULL };
         for (int i = 0; tcp_paths[i] != NULL; i++) {
             fp = fopen(tcp_paths[i], "r");
             if (fp) break;
@@ -312,11 +584,14 @@ static int take_snapshot(const config_t *cfg, snapshot_t *snap) {
                 }
             }
             fclose(fp);
+            snap->count += count;
+            got_anything = 1;
         }
     }
 
-    /* UDP connections. */
+    /* UDP connections (or default, which includes both). */
     if (cfg->show_udp || (!cfg->show_tcp && !cfg->show_udp)) {
+        static const char *udp_paths[] = { "/proc/net/udp", "/proc/net/udp6", NULL };
         for (int i = 0; udp_paths[i] != NULL; i++) {
             fp = fopen(udp_paths[i], "r");
             if (fp) break;
@@ -335,8 +610,16 @@ static int take_snapshot(const config_t *cfg, snapshot_t *snap) {
                 }
             }
             fclose(fp);
+            got_anything = 1;
         }
     }
+
+    /* --- macOS / BSD: sysctl fallback when /proc not available --- */
+#if defined(__APPLE__) || defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__)
+    if (!got_anything) {
+        snap->count = take_snapshot_sysctl(cfg, snap);
+    }
+#endif
 
     return snap->count;
 }
@@ -468,7 +751,7 @@ int netstatplus(int argc, char *argv[]) {
         pfd.events = POLLIN | POLLHUP;
         pfd.revents = 0;
 
-        poll(&pfd, 0, timeout_ms); /* sleep; check interrupted flag */
+        poll(&pfd, 1, timeout_ms); /* sleep; check interrupted flag */
 
         if (interrupted) break;
     }
