@@ -51,14 +51,34 @@ static void on_signal(int sig)
         kill(-g_pgid, g_interrupts > 1 ? SIGKILL : sig);
 }
 
+/* The caller's handlers, saved so a host shell gets them back afterwards. */
+static struct sigaction g_old_int, g_old_term;
+
 static void install_handlers(void)
 {
     struct sigaction sa;
     memset(&sa, 0, sizeof sa);
     sa.sa_handler = on_signal;
     sigemptyset(&sa.sa_mask);
-    sigaction(SIGINT, &sa, NULL);
-    sigaction(SIGTERM, &sa, NULL);
+    sigaction(SIGINT, &sa, &g_old_int);
+    sigaction(SIGTERM, &sa, &g_old_term);
+}
+
+/* Reset per-run state (the shell calls processgroup_main repeatedly in one
+   process) and take over SIGINT/SIGTERM for the duration of the run. */
+static void begin_run(void)
+{
+    g_interrupts = 0;
+    g_signal_sent = 0;
+    g_done = 0;
+    g_pgid = 0;
+    install_handlers();
+}
+
+static void restore_handlers(void)
+{
+    sigaction(SIGINT, &g_old_int, NULL);
+    sigaction(SIGTERM, &g_old_term, NULL);
 }
 
 static const struct { const char *name; int num; } sigtab[] = {
@@ -244,8 +264,6 @@ static int run_launch(struct config *cfg, struct job *jobs, int njobs)
     pid_t pgid = 0;
     int failures = 0;
 
-    install_handlers();
-
     for (int i = 0; i < njobs; i++) {
         pid_t pid = fork();
         if (pid < 0) { perror("fork"); failures++; continue; }
@@ -312,7 +330,7 @@ static int run_attach(struct config *cfg)
         fprintf(stderr, "processgroup: process group %d: %s\n", (int)pgid, strerror(errno));
         return 1;
     }
-    install_handlers();                         /* g_pgid stays 0: Ctrl-C only stops monitoring */
+    /* g_pgid stays 0 here, so Ctrl-C only stops monitoring. */
 
     if (cfg->sig) {
         if (cfg->after > 0) sleep_sec(cfg->after);
@@ -402,7 +420,10 @@ int processgroup_main(int argc, char *argv[])
             fprintf(stderr, "processgroup: -p needs -s and/or -m\n");
             return 1;
         }
-        return run_attach(&cfg);
+        begin_run();
+        int rc = run_attach(&cfg);
+        restore_handlers();
+        return rc;
     }
 
     struct job *jobs = NULL;
@@ -424,7 +445,9 @@ int processgroup_main(int argc, char *argv[])
         for (int i = 0; i < njobs; i++) jobs[i].argv = &argv[optind];
     }
 
+    begin_run();
     rc = run_launch(&cfg, jobs, njobs);
+    restore_handlers();
 
     if (cfg.file)
         for (int i = 0; i < njobs; i++) { free(jobs[i].buf); free(jobs[i].argv); }

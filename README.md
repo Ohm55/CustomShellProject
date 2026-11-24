@@ -123,3 +123,97 @@ filecrypt_main(command_argc, command_argv);
 
 When building the custom shell, compile filecrypt with
 `FILECRYPT_NO_MAIN` and link OpenSSL using `-lcrypto`.
+
+## Processgroup presentation demo
+
+`processgroup` runs a batch of processes as one process group. It can signal
+the whole group at once and monitor each member's CPU time and memory. It
+reads `/proc`, so run the demo on **Linux**. The demo uses the standalone
+build because `netstatplus` does not compile on Linux yet.
+
+### Setup
+
+From the project root:
+
+```sh
+sudo apt install build-essential procps    # if gcc or ps is missing
+gcc -std=c11 -Wall -Wextra -pthread source/processgroup/processgroup.c -o processgroup
+```
+
+### Demo commands
+
+Run these in order. The whole demo takes about two minutes.
+
+**1. Help**
+
+```sh
+./processgroup -h
+```
+
+Shows the three modes: launch copies of a command (`-n`), launch a batch file
+(`-f`), or attach to an existing group (`-p`).
+
+**2. Launch, monitor, and signal the whole group**
+
+```sh
+./processgroup -n 3 -m -i 1 -s TERM -a 3 -- sha256sum /dev/zero
+```
+
+Starts three CPU-bound processes in one new group. The monitor table prints
+every second and CPU time climbs about 1 second per sample. After 3 seconds,
+one `kill(-pgid, SIGTERM)` stops all three. Each `[done]` line reports
+`killed by signal 15 (Terminated)` with that process's user/sys time and peak
+memory. The summary shows `3 abnormal exit(s)` and exit status 1, which is
+expected here.
+
+**3. Batch file**
+
+```sh
+cat tests/processgroup/batch_example.txt
+./processgroup -m -f tests/processgroup/batch_example.txt
+```
+
+Runs three different commands from the file in one group. `echo` and `uname`
+finish right away. The monitor then shows only `sleep` left in the group
+until it exits after 2 seconds. The summary shows `0 abnormal exit(s)`.
+
+**4. Attach to a group that is already running**
+
+```sh
+sh -c 'sleep 300 & sleep 300 & wait' &
+PG=$!
+sleep 1                           # let sh start both sleeps
+./processgroup -p $PG -m -c 1     # 3 members, STATE S (sleeping)
+./processgroup -p $PG -s STOP
+./processgroup -p $PG -m -c 1     # same 3 members, STATE T (stopped)
+./processgroup -p $PG -s CONT
+./processgroup -p $PG -s TERM
+./processgroup -p $PG -m -c 1     # "No such process": the group is gone
+```
+
+An interactive shell puts each background job in its own process group, so
+`$!` is both the job's PID and its PGID. Attach mode pauses, resumes, and
+terminates the shell and both of its `sleep` children with one signal each.
+
+**5. Ctrl-C is forwarded to the group (optional)**
+
+```sh
+./processgroup -n 3 -- sleep 60
+```
+
+Press Ctrl-C after a second. The children are in their own group, so the
+terminal does not signal them directly. `processgroup` catches SIGINT and
+forwards it to the group, and all three report `killed by signal 2
+(Interrupt)`. A second Ctrl-C would escalate to SIGKILL.
+
+### Tests and manual
+
+```sh
+cp processgroup tests/processgroup/
+bash tests/processgroup/test_processgroup.sh    # expect: Passed: 24   Failed: 0
+rm tests/processgroup/processgroup
+man ./manpages/processgroup.1
+```
+
+In the Custom Shell, `processgroup` is registered in `source/main.c` and
+calls `processgroup_main(argc, argv)`. Compile it with `-DPG_NO_MAIN -pthread`.
