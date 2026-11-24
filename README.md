@@ -1,5 +1,27 @@
 # Operating Systems Group Project
 
+## Filediffadvanced presentation demo
+
+The four sample files are in the project root.
+
+Start `./custom_shell` from the project root. At the `custom-shell>` prompt,
+run these three commands when it is time to demonstrate `filediffadvanced`.
+
+```text
+filediffadvanced -h
+filediffadvanced left.txt right.txt
+filediffadvanced -b left.bin right.bin
+```
+
+- The help output shows the command syntax and the `-b` flag for binary mode.
+- The text comparison reports `First difference: line 2` because `two` changes
+  to `new`. Both files are 8 bytes.
+- The binary comparison reports `First difference: byte 2` because `02` changes
+  to `04`. Both files are 3 bytes.
+
+Both comparisons show elapsed time and CPU time. `[exit status: 1]` means the
+files differ, which is expected for these two examples.
+
 ## Log analyzer (command 5)
 
 The log analyzer counts ERROR, WARN/WARNING, INFO, and Other lines in a

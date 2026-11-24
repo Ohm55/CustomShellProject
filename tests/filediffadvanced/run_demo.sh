@@ -19,20 +19,15 @@ run_comparison() {
     fi
 }
 
-printf 'one\ntwo\n' > "$demo_dir/left.txt"
-printf 'one\nnew\n' > "$demo_dir/right.txt"
-printf '\001\002\003' > "$demo_dir/left.bin"
-printf '\001\004\003' > "$demo_dir/right.bin"
-
 printf 'Text comparison\n\nleft.txt\n'
-cat "$demo_dir/left.txt"
+cat left.txt
 printf '\nright.txt\n'
-cat "$demo_dir/right.txt"
+cat right.txt
 printf '\n'
-run_comparison "$demo_dir/left.txt" "$demo_dir/right.txt"
+run_comparison left.txt right.txt
 
 printf '\nBinary comparison (-b)\n\n'
-printf 'left.bin (hex):  %s\n' "$(od -An -tx1 "$demo_dir/left.bin" | xargs)"
-printf 'right.bin (hex): %s\n' "$(od -An -tx1 "$demo_dir/right.bin" | xargs)"
+printf 'left.bin (hex):  %s\n' "$(od -An -tx1 left.bin | xargs)"
+printf 'right.bin (hex): %s\n' "$(od -An -tx1 right.bin | xargs)"
 printf '\n'
-run_comparison -b "$demo_dir/left.bin" "$demo_dir/right.bin"
+run_comparison -b left.bin right.bin
