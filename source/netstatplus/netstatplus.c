@@ -636,12 +636,11 @@ int netstatplus(int argc, char *argv[]) {
     int had_tcp   = 0;
     int had_udp   = 0;
 
-    /* Reset getopt state for repeated calls (BSD-compatible). */
+    /* Reset getopt state for repeated calls (critical when invoked from shell). */
+    optind = 1;
 #if defined(__APPLE__) || defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__)
     extern int optreset;
     optreset = 1;
-#else
-    optind = 0;
 #endif
     int saved_opterr = opterr;
     opterr = 0;
