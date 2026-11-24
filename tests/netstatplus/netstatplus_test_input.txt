@@ -1,0 +1,110 @@
+=== Test Case 1: Help flag ===
+Command: netstatplus -h
+Expected Output (stdout, exit code 0):
+Usage: netstatplus [OPTIONS]
+Options:
+  -t       Show only TCP connections
+  -u       Show only UDP connections
+  -l       Show only listening sockets
+  -n       Numeric addresses (no name resolution)
+  -i SEC   Update interval in seconds (default: 1.0)
+  -1       One-shot: single display, then exit
+  -h       Show this help
+
+---
+
+=== Test Case 2: Invalid option ===
+Command: netstatplus -x
+Expected Output (stderr, exit code 2):
+netstatplus: unknown option -x
+Usage: netstatplus [-t] [-u] [-l] [-n] [-i SECS] [-1] [-h]
+
+---
+
+=== Test Case 3: Missing argument to -i ===
+Command: netstatplus -i
+Expected Output (stderr, exit code 2):
+netstatplus: option -i requires a value
+Usage: netstatplus [-t] [-u] [-l] [-n] [-i SECS] [-1] [-h]
+
+---
+
+=== Test Case 4: Invalid interval value ===
+Command: netstatplus -i abc
+Expected Output (stderr, exit code 2):
+netstatplus: invalid interval 'abc'
+Usage: netstatplus [-t] [-u] [-l] [-n] [-i SECS] [-1] [-h]
+
+---
+
+=== Test Case 5: One-shot display (no connections) ===
+Command: netstatplus -1
+Expected Output (stdout, exit code depends on system):
+  Proto   Recv-Q  Send-Q  Local Address         Foreign Address       State           RX          TX
+
+Note: If there are no active network connections the output shows only headers.
+The exact connection list varies per-system depending on what sockets exist.
+
+---
+
+=== Test Case 6: TCP-only mode ===
+Command: netstatplus -t -1
+Expected Output (stdout, exit code depends):
+  Proto   Recv-Q  Send-Q  Local Address         Foreign Address       State           RX          TX
+  tcp     0       0       ...                   ...                   ESTABLISHED      <rate>       <rate>
+
+Note: Only TCP connections are shown. UDP entries (if any) are filtered out.
+
+---
+
+=== Test Case 7: UDP-only mode ===
+Command: netstatplus -u -1
+Expected Output (stdout, exit code depends):
+  Proto   Recv-Q  Send-Q  Local Address         Foreign Address       State           RX          TX
+  udp     0       0       ...                   ...                   LISTEN            <rate>       <rate>
+
+Note: Only UDP connections are shown. TCP entries (if any) are filtered out.
+
+---
+
+=== Test Case 8: Listening only ===
+Command: netstatplus -l -1
+Expected Output (stdout, exit code depends):
+  Proto   Recv-Q  Send-Q  Local Address         Foreign Address       State           RX          TX
+  tcp     0       0       0.0.0.0:22            0.0.0.0:*             LISTEN            0 B        0 B
+
+Note: Only entries in the LISTEN state are displayed (applies to both TCP and UDP).
+
+---
+
+=== Test Case 9: Numeric mode ===
+Command: netstatplus -n -1
+Expected Output (stdout, exit code depends):
+Addresses are shown as raw IP/port numbers without any service name resolution.
+
+Note: The output format is the same as default, but all addresses remain numeric.
+
+---
+
+=== Test Case 10: Combined flags ===
+Command: netstatplus -t -l -n -i 2 -1
+Expected Output (stdout):
+Shows only TCP listening sockets with a 2-second one-shot display.
+
+Note: Multiple flags combine correctly; the command exits after one iteration due to -1.
+
+---
+
+=== Test Case 11: Invalid interval (zero) ===
+Command: netstatplus -i 0
+Expected Output (stderr, exit code 2):
+netstatplus: invalid interval '0'
+Usage: netstatplus [-t] [-u] [-l] [-n] [-i SECS] [-1] [-h]
+
+---
+
+=== Test Case 12: Invalid interval (negative) ===
+Command: netstatplus -i -5
+Expected Output (stderr, exit code 2):
+netstatplus: invalid interval '-5'
+Usage: netstatplus [-t] [-u] [-l] [-n] [-i SECS] [-1] [-h]

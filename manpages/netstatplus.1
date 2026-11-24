@@ -1,0 +1,110 @@
+.TH NETSTATPLUS 1 "November 2026" "Custom Shell" "User Commands"
+.SH NAME
+netstatplus \- extended network connection monitor with real-time traffic analysis
+.SH SYNOPSIS
+.B netstatplus
+[\fIoptions\fR]
+.SH DESCRIPTION
+.B netstatplus
+reads the kernel's network socket tables from
+.I /proc/net/tcp
+,
+.I /proc/net/tcp6
+,
+.I /proc/net/udp
+,
+and
+.I /proc/net/udp6
+to display active connections with their state, local and remote addresses,
+and ports.
+Unlike traditional \fBnetstat\fR(8),
+.B netstatplus
+provides continuous real-time monitoring using \fBpoll()\fR(2) to observe
+transfer rates (bytes per second) over a configurable interval without busy-waiting.
+Between each snapshot the command computes deltas from the previous observation,
+displaying approximate throughput for every connection.
+
+Interrupts (\fBSIGINT\fR or \fBSIGTERM\fR) cause a graceful exit after the
+current iteration finishes displaying data.
+.SH OPTIONS
+.TP
+.B \-t
+Show only TCP connections (the default when no protocol flag is given).
+.TP
+.B \-u
+Show only UDP connections.
+.TP
+.B \-l
+Show only listening sockets (\fBST\f state).
+.TP
+.B \-n
+Display numeric addresses and ports; skip name resolution.
+.TP
+.BI \-i " SECONDS"
+Update interval in seconds (default: 1.0). The value must be greater than 0.
+Fractional values are supported (e.g. \fB\-i 0.5\fR for half-second updates).
+.TP
+.B \-1
+One-shot mode: display a single snapshot and exit immediately instead of looping.
+.TP
+.B \-h
+Print usage information and exit with status 0.
+.SH EXIT STATUS
+.TP
+.B 0
+Success; all connections listed without error.
+.TP
+.B 1
+An internal or system error occurred (could not open \fI/proc\fR files, read
+failure, etc.).
+.TP
+.B 2
+Usage error: an invalid option or combination of options was supplied.
+.TP
+.B 130
+The process was interrupted by \fBSIGINT\fR (Ctrl-C).
+.SH EXAMPLES
+.PP
+Show all active TCP connections with live traffic rates:
+.RS
+.nf
+$ netstatplus \-t
+  Proto  Recv\-Q Send\-Q Local Address          Foreign Address        State         RX        TX
+  tcp    0      0      192\.168\.1\.10:443      10\.45\.67\.89:52340     ESTABLISHED   12.4 KB/s  8.7 KB/s
+  tcp    0      0      192\.168\.1\.10:80       172\.16\.0\.5:48812     ESTABLISHED   3\.1 MB/s   1.2 MB/s
+  tcp    0      0      0\.0\.0\.0:22            0\.0\.0\.0:*             LISTEN        0 B/s     0 B/s
+.fi
+.RE
+.PP
+List only listening UDP sockets in numeric mode:
+.RS
+.nf
+$ netstatplus \-u \-l \-n
+  Proto  Recv\-Q Send\-Q Local Address          Foreign Address        State         RX        TX
+  udp    0      0      0\.0\.0\.0:68            0\.0\.0\.0:*             LISTEN        0 B/s     0 B/s
+.fi
+.RE
+.PP
+One-shot display of all connections:
+.RS
+.nf
+$ netstatplus \-1
+.fi
+.RE
+.SH FILES
+.TP
+.I /proc/net/tcp
+TCPv4 socket table.
+.TP
+.I /proc/net/tcp6
+TCPv6 socket table.
+.TP
+.I /proc/net/udp
+UDPv4 socket table.
+.TP
+.I /proc/net/udp6
+UDPv6 socket table.
+.SH SEE ALSO
+.BR netstat (8),
+.BR poll (2),
+.BR proc (5)
