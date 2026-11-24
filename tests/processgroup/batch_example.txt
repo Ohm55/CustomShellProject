@@ -1,0 +1,4 @@
+# Three commands, one per line, all started in the same process group.
+sleep 2
+echo hello from the batch
+uname -sr
