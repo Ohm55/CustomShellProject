@@ -15,6 +15,12 @@
 #include <sys/wait.h>
 #include <sys/resource.h>
 
+#ifdef __APPLE__
+#include <libproc.h>
+#include <sys/proc_info.h>
+#include <mach/mach_time.h>
+#endif
+
 #define MAX_ARGS 64
 
 struct job {
@@ -103,6 +109,52 @@ static int parse_signal(const char *s)
 
 //proc monitoring
 
+#ifdef __APPLE__
+/* macOS has no /proc: list the group's members with libproc instead.
+   Print a table of every live process in pgid. Returns member count. */
+static int snapshot(pid_t pgid, int print)
+{
+    static mach_timebase_info_data_t tb;
+    if (tb.denom == 0) mach_timebase_info(&tb);
+
+    pid_t pids[1024];
+    int bytes = proc_listpids(PROC_PGRP_ONLY, (uint32_t)pgid, pids, (int)sizeof pids);
+    if (bytes <= 0) return 0;
+    int count = bytes / (int)sizeof(pid_t);
+    int members = 0;
+
+    for (int i = 0; i < count; i++) {
+        struct proc_bsdinfo bi;
+        if (pids[i] <= 0 ||
+            proc_pidinfo(pids[i], PROC_PIDTBSDINFO, 0, &bi, sizeof bi) != (int)sizeof bi)
+            continue;                           /* process exited meanwhile */
+        if ((pid_t)bi.pbi_pgid != pgid) continue;
+
+        struct proc_taskinfo ti;
+        int have_ti = proc_pidinfo(pids[i], PROC_PIDTASKINFO, 0, &ti, sizeof ti) == (int)sizeof ti;
+
+        /* Same letters as Linux: R running, S sleeping, T stopped, Z zombie. */
+        char state;
+        if (bi.pbi_status == 4 /* SSTOP */)      state = 'T';
+        else if (bi.pbi_status == 5 /* SZOMB */) state = 'Z';
+        else state = (have_ti && ti.pti_numrunning > 0) ? 'R' : 'S';
+
+        /* CPU times are in Mach time units, resident size in bytes. */
+        double cpu = have_ti
+            ? (double)(ti.pti_total_user + ti.pti_total_system) * tb.numer / tb.denom / 1e9
+            : 0.0;
+        long rsskb = have_ti ? (long)(ti.pti_resident_size / 1024) : 0;
+        const char *name = bi.pbi_name[0] ? bi.pbi_name : bi.pbi_comm;
+        int name_max = bi.pbi_name[0] ? (int)sizeof bi.pbi_name : (int)sizeof bi.pbi_comm;
+
+        members++;
+        if (print)
+            printf("  %-7d %-7d %-5c %8.2f %9ld  %.*s\n", (int)pids[i],
+                   (int)bi.pbi_ppid, state, cpu, rsskb, name_max, name);
+    }
+    return members;
+}
+#else
 /* Print a table of every live process in pgid. Returns member count. */
 static int snapshot(pid_t pgid, int print)
 {
@@ -150,6 +202,7 @@ static int snapshot(pid_t pgid, int print)
     closedir(d);
     return members;
 }
+#endif
 
 static void sleep_sec(double s)
 {
@@ -175,7 +228,9 @@ static void print_header(pid_t pgid, int members)
 static void *supervisor(void *arg)
 {
     const struct config *cfg = arg;
-    double start = now_sec(), next_print = start;
+    /* Let the children finish exec() before the first sample, so the table
+       shows their command names rather than this program's. */
+    double start = now_sec(), next_print = start + 0.1;
 
     while (!g_done) {
         double t = now_sec();
@@ -308,10 +363,14 @@ static int run_launch(struct config *cfg, struct job *jobs, int njobs)
         char desc[96];
         describe_status(st, desc, sizeof desc);
         if (!(WIFEXITED(st) && WEXITSTATUS(st) == 0)) failures++;
+        long maxrss_kb = ru.ru_maxrss;
+#ifdef __APPLE__
+        maxrss_kb /= 1024;                      /* macOS reports bytes, Linux KB */
+#endif
         printf("[done] pid %d (%s) %s | user %.2fs sys %.2fs maxrss %ld KB\n",
                (int)p, name, desc,
                ru.ru_utime.tv_sec + ru.ru_utime.tv_usec / 1e6,
-               ru.ru_stime.tv_sec + ru.ru_stime.tv_usec / 1e6, ru.ru_maxrss);
+               ru.ru_stime.tv_sec + ru.ru_stime.tv_usec / 1e6, maxrss_kb);
         remaining--;
     }
 
